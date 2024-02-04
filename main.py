@@ -1,11 +1,27 @@
 import numpy as np
 
+### Current Limitations
+# 1. Supports fixed, hinge or roller supports at ends
+# 2. Only supports point loads and uniform distributed loads
+# 3. Only supports 1D members
+# 4. Only supports 1D members with 1D loads
+# 5. Only supports 1D members with 1D loads and 1D supports
+# 6. Does not cater for free ended members
+
+
+support_rotations = {
+    'fixed': 0,
+    'roller': 1,
+    'hinge': 1,
+    # 'free': 1
+}
+
 class Node:
-    def __init__(self, x_coordinates, type_of_support, rotation_coefficient: int, deflection: float = 0.0):
+    def __init__(self, x_coordinates, type_of_support, deflection: float = 0.0):
         self.x_coordinates = x_coordinates
         self.type_of_support = type_of_support
         self.rotation = None
-        self.rotation_coefficient = rotation_coefficient
+        self.rotation_coefficient = support_rotations[type_of_support]
         self.deflection = deflection
 
     def set_rotation(self, rotation: float):
@@ -25,6 +41,7 @@ class Member:
         self.fEMb = fEMb
 
     def get_moments(self):
+
         m1 = self.fEMa + (self.EI / self.length) * (2 * self.node_a.rotation + self.node_b.rotation) # + (3 * self.node_a.deflection / self.length)
         m2 = self.fEMb + (self.EI / self.length) * (self.node_a.rotation + 2 * self.node_b.rotation) # - (3 * self.node_b.deflection / self.length)
         return m1, m2
@@ -45,35 +62,145 @@ class PointLoad:
         self.coordinates = coordinates
         self.magnitude = magnitude
 
-support_rotations = {
-    'fixed': 0,
-    'roller': 1
-}
-
 def get_rotations(members: list[Member]): 
+
     if (len(members) == 1):
         c = members[0].EI / members[0].length
-        print(c)
-        coeff_matrix = np.array([[2 * c, c], [c, 2 * c]])
+        if (members[0].node_a.type_of_support == 'fixed' and members[0].node_b.type_of_support == 'fixed'):
+            results = np.array([0, 0])
+            members[0].node_a.set_rotation(results[0])
+            members[0].node_b.set_rotation(results[1])
+            return
+        elif (members[0].node_a.type_of_support == 'fixed'):
+            results = np.array([[0], [-members[0].fEMb / (2 * c)]])
+            members[0].node_a.set_rotation(0)
+            members[0].node_b.set_rotation(-members[0].fEMb / (2 * c))
+            return
+        elif (members[0].node_b.type_of_support == 'fixed'):
+            results = np.array([[-members[0].fEMa / (2 * c)], [0]])
+            members[0].node_a.set_rotation(-members[0].fEMa / (2 * c))
+            members[0].node_b.set_rotation(0)
+            return
+        
+        coeff_matrix = np.array([
+            [members[0].node_a.rotation_coefficient * 2 * c, members[0].node_b.rotation_coefficient * c], 
+            [members[0].node_a.rotation_coefficient * c, members[0].node_b.rotation_coefficient * 2 * c]
+            ])
         res_matrix = np.array([[-members[0].fEMa], [-members[0].fEMb]])
-        print(coeff_matrix)
-        print(res_matrix)
         results = np.dot(np.linalg.inv(coeff_matrix), res_matrix)
-        print(results)
         members[0].node_a.set_rotation(results[0][0])
         members[0].node_b.set_rotation(results[1][0])
-        print(members[0])
     
     else:
+        if (members[0].node_a.type_of_support == 'fixed' or members[-1].node_b.type_of_support == 'fixed'):
+            if (members[0].node_a.type_of_support == 'fixed'):
+                members[0].node_a.set_rotation(0)
+                if (members[-1].node_b.type_of_support == 'fixed'):
+                    members[-1].node_b.set_rotation(0)
+                    matrix = np.zeros((len(members) - 1, len(members) - 1))
+                    res_matrix = np.zeros((len(members) -  1, 1))
+
+                    for i in range(len(members)):
+                        member = members[i]
+                        c = member.EI / member.length
+
+                        if (i == 0):
+                            matrix[i][i] += member.node_b.rotation_coefficient * 2 * c
+                            res_matrix[i][0] += -member.fEMb
+
+                        if (i == len(members) - 1):
+                            matrix[i-1][i-1] += member.node_a.rotation_coefficient * 2 * c
+                            res_matrix[i - 1][0] += -member.fEMa
+
+                        if i != 0 and i != len(members) - 1:
+                            print(i)
+                            matrix[i - 1][i - 1] += member.node_a.rotation_coefficient * 2 * c
+                            matrix[i - 1][i] += member.node_b.rotation_coefficient * c
+                            matrix[i][i - 1] += member.node_a.rotation_coefficient * c 
+                            matrix[i][i] = member.node_b.rotation_coefficient * 2 * c
+                            res_matrix[i - 1][0] += -member.fEMa
+                            res_matrix[i][0] += -member.fEMb
+
+                    results = np.dot(np.linalg.inv(matrix), res_matrix)
+
+                    for i in range(len(members)):
+                        if (i == 0 or i == len(members) - 1):
+                            continue
+                        
+                        members[i].node_a.set_rotation(results[i - 1][0])
+                        members[i].node_b.set_rotation(results[i][0])
+
+                else:
+                    matrix = np.zeros((len(members), len(members)))
+                    res_matrix = np.zeros((len(members), 1))
+
+                    for i in range(len(members)):
+                        member = members[i]
+                        c = member.EI / member.length
+
+                        if (i == 0):
+                            matrix[i][i] += member.node_b.rotation_coefficient * 2 * c
+                            res_matrix[i][0] += -member.fEMb
+
+                        if (i != 0):
+                            matrix[i][i] += member.node_a.rotation_coefficient * 2 * c
+                            matrix[i][i - 1] += member.node_b.rotation_coefficient * c
+                            matrix[i - 1][i] += member.node_a.rotation_coefficient * c
+                            matrix[i - 1][i - 1] += member.node_b.rotation_coefficient * 2 * c
+                            res_matrix[i][0] += -member.fEMa
+
+                    print(matrix)
+                    print(res_matrix)
+
+                    results = np.dot(np.linalg.inv(matrix), res_matrix)
+
+                    for i in range(len(members)):
+                        if (i == 0):
+                            continue
+                        members[i].node_a.set_rotation(results[i][0])
+                        members[i].node_b.set_rotation(results[i - 1][0])
+            
+            else:
+                members[-1].node_b.set_rotation(0)
+                matrix = np.zeros((len(members), len(members)))
+                res_matrix = np.zeros((len(members), 1))
+
+                for i in range(len(members)):
+                    member = members[i]
+                    c = member.EI / member.length
+
+                    if (i == len(members) - 1):
+                            matrix[i-1][i-1] += member.node_a.rotation_coefficient * 2 * c
+                            res_matrix[i - 1][0] += -member.fEMa
+
+                    if (i != 0):
+                        matrix[i][i] += member.node_a.rotation_coefficient * 2 * c
+                        matrix[i][i - 1] += member.node_b.rotation_coefficient * c
+                        matrix[i - 1][i] += member.node_a.rotation_coefficient * c
+                        matrix[i - 1][i - 1] += member.node_b.rotation_coefficient * 2 * c
+                        res_matrix[i][0] += -member.fEMa
+
+                print(matrix)
+                print(res_matrix)
+
+                results = np.dot(np.linalg.inv(matrix), res_matrix)
+
+                for i in range(len(members)):
+                    if (i == len(members) - 1):
+                        continue
+                    members[i].node_a.set_rotation(results[i][0])
+                    members[i].node_b.set_rotation(results[i - 1][0])
+            return
+
         matrix = np.zeros((len(members) + 1, len(members) + 1))
         res_matrix = np.zeros((len(members) + 1, 1))
         for m in range(len(members)):
             member = members[m]
             c = member.EI / member.length
-            matrix[m][m] += 2 * c
-            matrix[m][m + 1] += c
-            matrix[m + 1][m] += c
-            matrix[m + 1][m + 1] += 2 * c
+            matrix[m][m] += member.node_a.rotation_coefficient * 2 * c
+            matrix[m][m + 1] += member.node_b.rotation_coefficient * c
+            matrix[m + 1][m] += member.node_a.rotation_coefficient * c
+            matrix[m + 1][m + 1] += member.node_b.rotation_coefficient * 2 * c
             res_matrix[m][0] += -member.fEMa
             res_matrix[m + 1][0] += -member.fEMb
 
@@ -86,18 +213,18 @@ def get_rotations(members: list[Member]):
 
 def calculate_fem_for_member():
     nodes = [
-        Node(x_coordinates=0, type_of_support='roller', rotation_coefficient=support_rotations['roller']),
-        # Node(x_coordinates=10, type_of_support='roller', rotation_coefficient=support_rotations['roller']),
-        Node(x_coordinates=20, type_of_support='roller', rotation_coefficient=support_rotations['roller']),
-        # Node(x_coordinates=30, type_of_support='roller', rotation_coefficient=support_rotations['roller'])
+        Node(x_coordinates=0, type_of_support='roller'),
+        Node(x_coordinates=8, type_of_support='roller'),
+        Node(x_coordinates=16, type_of_support='roller'),
+        Node(x_coordinates=24, type_of_support='fixed')
     ]
 
     members = []
     loads = [
-        UniformDistributedLoad(magnitude = 20, start_end_x_coordinates = [2, 8]),
-        PointLoad(coordinates=10, magnitude=10),
-        UniformDistributedLoad(magnitude=15, start_end_x_coordinates=[10, 14]),
-        PointLoad(coordinates=7, magnitude=80)
+        UniformDistributedLoad(magnitude = 20, start_end_x_coordinates = [0, 16]),
+        PointLoad(coordinates=20, magnitude = 60),
+        # UniformDistributedLoad(magnitude=15, start_end_x_coordinates=[10, 14]),
+        # PointLoad(coordinates=7, magnitude=80)
     ]
 
     number_of_members: int = len(nodes) - 1
@@ -108,14 +235,13 @@ def calculate_fem_for_member():
     for i in range(len(members)):
         a = members[i].node_a.x_coordinates
         b = members[i].node_b.x_coordinates
-        l = b - a
+        l = members[i].length
 
         for j in range(len(loads)):
-            print(j)
             if isinstance(loads[j], PointLoad) and a <= loads[j].coordinates < b:
                 point_load = loads[j]
                 x1_distance = point_load.coordinates - a
-                x2_distance = b - (point_load.coordinates - a)
+                x2_distance = b - point_load.coordinates
                 members[i].fEMa -= point_load.magnitude * x2_distance ** 2 * x1_distance / l ** 2
                 members[i].fEMb += point_load.magnitude * x1_distance ** 2 * x2_distance / l ** 2
 
@@ -151,6 +277,8 @@ def calculate_fem_for_member():
         members[i].set_fems(members[i].fEMa, members[i].fEMb)
 
     get_rotations(members)
+    for member in members:
+        print(member)
 
 calculate_fem_for_member()
 
